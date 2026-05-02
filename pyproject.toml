@@ -12,4 +12,21 @@ dependencies = [
 [dependency-groups]
 dev = [
     "grpcio-tools>=1.62.3",
+    "pytest>=8.0",
+    "ruff>=0.6",
 ]
+
+[tool.ruff]
+# Generated protobuf/grpc stubs are not source we maintain — exclude
+# them from lint, otherwise every regeneration churns a 50-error diff.
+extend-exclude = ["*_pb2.py", "*_pb2.pyi", "*_pb2_grpc.py"]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# E501 (line too long) is enforced by `ruff format`, not the linter.
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
