@@ -1,0 +1,201 @@
+from pathlib import Path
+
+import grpc
+
+from pisa_api import av_server_pb2
+from pisa_api.av import (
+    ControlCommand,
+    ControlMode,
+    GenericAvService,
+    InitRequest,
+    ObjectKinematicData,
+    ObjectStateData,
+    ResetRequest,
+    ResetResponse,
+    RoadObjectType,
+    ShapeData,
+    ShapeDimensionData,
+    ShapeType,
+    StepRequest,
+    StepResponse,
+)
+from pisa_api.av.conversions import (
+    init_request_from_proto,
+    init_request_to_proto,
+    reset_request_from_proto,
+    reset_request_to_proto,
+    reset_response_from_proto,
+    reset_response_to_proto,
+    step_request_from_proto,
+    step_request_to_proto,
+    step_response_from_proto,
+    step_response_to_proto,
+)
+from pisa_api.simulator import ControlCommand as SimulatorControlCommand
+
+
+class FakeContext:
+    def __init__(self):
+        self.code = None
+        self.details = None
+
+    def peer(self):
+        return "test-peer"
+
+    def set_code(self, code):
+        self.code = code
+
+    def set_details(self, details):
+        self.details = details
+
+
+class FakeAvSystem:
+    def __init__(self):
+        self.init_request = None
+        self.reset_request = None
+        self.step_request = None
+        self.stopped = False
+
+    def init(self, request: InitRequest):
+        self.init_request = request
+
+    def reset(self, request: ResetRequest) -> ControlCommand:
+        self.reset_request = request
+        return ControlCommand(mode=ControlMode.ACKERMANN, payload={"speed": 1.0})
+
+    def step(self, request: StepRequest) -> ControlCommand:
+        self.step_request = request
+        return ControlCommand(mode=ControlMode.ACKERMANN, payload={"speed": 2.0})
+
+    def stop(self) -> None:
+        self.stopped = True
+
+    def should_quit(self) -> bool:
+        return False
+
+
+def test_av_and_simulator_reexport_same_shared_control_type() -> None:
+    assert ControlCommand is SimulatorControlCommand
+
+
+def test_av_init_and_observation_requests_round_trip() -> None:
+    init_data = InitRequest(
+        config={"autoware": {"headless": True}},
+        output_dir=Path("/tmp/output"),
+        map_name="town",
+        dt=0.05,
+    )
+
+    init_round_trip = init_request_from_proto(init_request_to_proto(init_data))
+
+    assert init_round_trip == init_data
+
+    observation = [
+        ObjectStateData(
+            type=RoadObjectType.CAR,
+            kinematic=ObjectKinematicData(time_ns=10, x=1.0, y=2.0),
+            shape=ShapeData(
+                type=ShapeType.BOUNDING_BOX,
+                dimensions=ShapeDimensionData(x=4.0, y=2.0, z=1.5),
+            ),
+        )
+    ]
+    reset_proto = reset_request_to_proto(
+        ResetRequest(output_dir=Path("run-1"), initial_observation=observation)
+    )
+    reset_round_trip = reset_request_from_proto(reset_proto)
+    step_round_trip = step_request_from_proto(
+        step_request_to_proto(StepRequest(observation=observation, timestamp_ns=123))
+    )
+
+    assert reset_round_trip.output_dir == Path("run-1")
+    assert reset_round_trip.initial_observation == observation
+    assert step_round_trip.observation == observation
+    assert step_round_trip.timestamp_ns == 123
+
+
+def test_av_control_responses_round_trip() -> None:
+    ctrl_cmd = ControlCommand(
+        mode=ControlMode.ACKERMANN,
+        payload={"steer": 0.1, "speed": 12.5},
+    )
+
+    reset_round_trip = reset_response_from_proto(
+        reset_response_to_proto(ResetResponse(ctrl_cmd=ctrl_cmd))
+    )
+    step_round_trip = step_response_from_proto(
+        step_response_to_proto(StepResponse(ctrl_cmd=ctrl_cmd))
+    )
+
+    assert reset_round_trip.ctrl_cmd == ctrl_cmd
+    assert step_round_trip.ctrl_cmd == ctrl_cmd
+
+
+def test_generic_av_service_maps_lifecycle_requests_to_dataclass_av_system() -> None:
+    av_system = FakeAvSystem()
+    service = GenericAvService(av_system, name="FakeAV")
+
+    init_request = av_server_pb2.AvServerMessages.InitRequest()
+    init_request.config.config.update({"use_sim_time": True})
+    init_request.output_dir.path = "/tmp/output"
+    init_request.map_name = "town"
+    init_request.dt = 0.05
+
+    init_response = service.Init(init_request, FakeContext())
+
+    assert init_response.success
+    assert av_system.init_request.config == {"use_sim_time": True}
+    assert av_system.init_request.output_dir.as_posix() == "/tmp/output"
+    assert av_system.init_request.map_name == "town"
+
+    reset_request = av_server_pb2.AvServerMessages.ResetRequest()
+    reset_request.output_dir.path = "run-1"
+    reset_request.initial_observation.add(type=int(RoadObjectType.CAR))
+
+    reset_response = service.Reset(reset_request, FakeContext())
+
+    assert reset_response.ctrl_cmd.mode == int(ControlMode.ACKERMANN)
+    assert av_system.reset_request.output_dir.as_posix() == "run-1"
+    assert av_system.reset_request.initial_observation[0].type == RoadObjectType.CAR
+
+    step_request = av_server_pb2.AvServerMessages.StepRequest(timestamp_ns=123)
+    step_response = service.Step(step_request, FakeContext())
+
+    assert step_response.ctrl_cmd.payload["speed"] == 2.0
+    assert av_system.step_request.timestamp_ns == 123
+
+
+def test_generic_av_service_rejects_step_before_reset() -> None:
+    av_system = FakeAvSystem()
+    service = GenericAvService(av_system, name="FakeAV")
+
+    init_response = service.Init(av_server_pb2.AvServerMessages.InitRequest(), FakeContext())
+    assert init_response.success
+
+    context = FakeContext()
+    response = service.Step(av_server_pb2.AvServerMessages.StepRequest(), context)
+
+    assert response == av_server_pb2.AvServerMessages.StepResponse()
+    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert "Reset" in context.details
+
+
+def test_serve_av_system_wraps_existing_serve_av(monkeypatch) -> None:
+    import pisa_api.av.service as service_module
+
+    calls = {}
+
+    def fake_serve_av(servicer, *, port, max_workers, name):
+        calls["servicer"] = servicer
+        calls["port"] = port
+        calls["max_workers"] = max_workers
+        calls["name"] = name
+
+    monkeypatch.setattr(service_module, "serve_av", fake_serve_av)
+
+    service_module.serve_av_system(FakeAvSystem(), name="FakeAV", port=1234, max_workers=2)
+
+    assert isinstance(calls["servicer"], GenericAvService)
+    assert calls["port"] == 1234
+    assert calls["max_workers"] == 2
+    assert calls["name"] == "FakeAV"

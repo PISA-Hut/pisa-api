@@ -1,0 +1,280 @@
+"""Generic SimServer implementation for dataclass-based simulators."""
+
+from __future__ import annotations
+
+import logging
+import threading
+from typing import Any, Protocol
+
+import grpc
+
+from pisa_api import sim_server_pb2
+from pisa_api.empty_pb2 import Empty
+from pisa_api.wrapper import BaseSimServer, serve_sim
+
+from .conversions import (
+    init_request_from_proto,
+    init_response_to_proto,
+    reset_request_from_proto,
+    reset_response_to_proto,
+    step_request_from_proto,
+    step_response_to_proto,
+)
+from .types import (
+    InitRequest,
+    InitResponse,
+    ResetRequest,
+    ResetResponse,
+    RuntimeFrameData,
+    StepRequest,
+    StepResponse,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class Simulator(Protocol):
+    def init(self, request: InitRequest) -> InitResponse | None:
+        ...
+
+    def reset(self, request: ResetRequest) -> RuntimeFrameData | ResetResponse:
+        ...
+
+    def step(self, request: StepRequest) -> RuntimeFrameData | StepResponse:
+        ...
+
+    def stop(self) -> None:
+        ...
+
+    def should_quit(self) -> bool:
+        ...
+
+
+class SimulatorError(Exception):
+    """Base exception for expected simulator failures."""
+
+
+class InvalidSimulatorRequest(SimulatorError):
+    """Raised when a valid protobuf request is invalid for the simulator."""
+
+
+class SimulatorNotReady(SimulatorError):
+    """Raised when lifecycle ordering is invalid for the simulator."""
+
+
+class GenericSimulatorService(BaseSimServer):
+    """Adapter from generated gRPC service methods to dataclass simulator hooks."""
+
+    def __init__(
+        self,
+        simulator: Simulator,
+        *,
+        name: str,
+        scenario_format: str | None = None,
+    ) -> None:
+        self._name = name
+        self._simulator = simulator
+        self._scenario_format = scenario_format
+        self._lock = threading.RLock()
+        self._initialized = False
+        self._reset_done = False
+
+    def Init(self, request, context):  # noqa: N802
+        logger.debug("Received Init request from client: %s", _peer(context))
+        with self._lock:
+            init_request = init_request_from_proto(request)
+            if (
+                self._scenario_format is not None
+                and init_request.scenario.format != self._scenario_format
+            ):
+                msg = f"Unsupported scenario format: {init_request.scenario.format}"
+                logger.error(msg)
+                return sim_server_pb2.SimServerMessages.InitResponse(success=False, msg=msg)
+
+            try:
+                result = self._simulator.init(init_request)
+            except InvalidSimulatorRequest as exc:
+                logger.error("Invalid init request: %s", exc)
+                return sim_server_pb2.SimServerMessages.InitResponse(success=False, msg=str(exc))
+            except Exception:
+                logger.exception("Failed to initialize %s", self._name)
+                return sim_server_pb2.SimServerMessages.InitResponse(
+                    success=False,
+                    msg=f"Failed to initialize {self._name}",
+                )
+
+            response = result if isinstance(result, InitResponse) else None
+            if response is not None and not response.success:
+                self._initialized = False
+                self._reset_done = False
+                return init_response_to_proto(response)
+
+            self._initialized = True
+            self._reset_done = False
+            return sim_server_pb2.SimServerMessages.InitResponse(
+                success=True,
+                msg=(response.msg if response is not None else f"{self._name} initialized"),
+            )
+
+    def Reset(self, request, context):  # noqa: N802
+        logger.debug("Received Reset request from client: %s", _peer(context))
+        with self._lock:
+            if not self._initialized:
+                return self._failed_precondition(
+                    context,
+                    "Simulator not initialized. Call Init first.",
+                    sim_server_pb2.SimServerMessages.ResetResponse(),
+                )
+
+            reset_request = reset_request_from_proto(request)
+            try:
+                result = self._simulator.reset(reset_request)
+                response = (
+                    result
+                    if isinstance(result, ResetResponse)
+                    else ResetResponse(frame=result)
+                )
+            except (InvalidSimulatorRequest, SimulatorNotReady, RuntimeError) as exc:
+                return self._failed_precondition(
+                    context,
+                    f"Failed to reset {self._name}: {exc}",
+                    sim_server_pb2.SimServerMessages.ResetResponse(),
+                )
+            except Exception as exc:
+                logger.exception("Failed to reset %s", self._name)
+                return self._internal_error(
+                    context,
+                    f"Failed to reset {self._name}: {exc}",
+                    sim_server_pb2.SimServerMessages.ResetResponse(),
+                )
+
+            self._reset_done = True
+            return reset_response_to_proto(response)
+
+    def Step(self, request, context):  # noqa: N802
+        logger.debug("Received Step request with timestamp_ns=%s", request.timestamp_ns)
+        with self._lock:
+            if not self._initialized:
+                return self._failed_precondition(
+                    context,
+                    "Simulator not initialized. Call Init first.",
+                    sim_server_pb2.SimServerMessages.StepResponse(),
+                )
+            if not self._reset_done:
+                return self._failed_precondition(
+                    context,
+                    "Simulator not reset. Call Reset before Step.",
+                    sim_server_pb2.SimServerMessages.StepResponse(),
+                )
+
+            step_request = step_request_from_proto(request)
+            try:
+                result = self._simulator.step(step_request)
+                response = (
+                    result
+                    if isinstance(result, StepResponse)
+                    else StepResponse(frame=result)
+                )
+            except (InvalidSimulatorRequest, SimulatorNotReady, RuntimeError) as exc:
+                return self._failed_precondition(
+                    context,
+                    f"Failed to step {self._name}: {exc}",
+                    sim_server_pb2.SimServerMessages.StepResponse(),
+                )
+            except Exception as exc:
+                logger.exception("Failed to step %s", self._name)
+                return self._internal_error(
+                    context,
+                    f"Failed to step {self._name}: {exc}",
+                    sim_server_pb2.SimServerMessages.StepResponse(),
+                )
+
+            return step_response_to_proto(response)
+
+    def Stop(self, request, context):  # noqa: N802
+        logger.debug("Received Stop request from client: %s", _peer(context))
+        with self._lock:
+            if not self._initialized:
+                return self._failed_precondition(
+                    context,
+                    "Simulator not initialized. Call Init first.",
+                    Empty(),
+                )
+
+            self._stop(context)
+            return Empty()
+
+    def Close(self, request, context):  # noqa: N802
+        logger.debug("Received Close request from client: %s", _peer(context))
+        with self._lock:
+            if self._initialized:
+                self._stop(context)
+            return Empty()
+
+    def ShouldQuit(self, request, context):  # noqa: N802
+        logger.debug("Received ShouldQuit request from client: %s", _peer(context))
+        with self._lock:
+            if not self._initialized:
+                return sim_server_pb2.SimServerMessages.ShouldQuitResponse(should_quit=False)
+
+            return sim_server_pb2.SimServerMessages.ShouldQuitResponse(
+                should_quit=self._simulator.should_quit()
+            )
+
+    def _stop(self, context: Any) -> None:
+        try:
+            self._simulator.stop()
+        except Exception as exc:
+            logger.exception("Failed to stop %s", self._name)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Failed to stop {self._name}: {exc}")
+        finally:
+            self._initialized = False
+            self._reset_done = False
+
+    @staticmethod
+    def _failed_precondition(context, details: str, response):
+        logger.error(details)
+        context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+        context.set_details(details)
+        return response
+
+    @staticmethod
+    def _internal_error(context, details: str, response):
+        logger.error(details)
+        context.set_code(grpc.StatusCode.INTERNAL)
+        context.set_details(details)
+        return response
+
+
+def serve_simulator(
+    simulator: Simulator,
+    *,
+    name: str,
+    scenario_format: str | None = None,
+    port: Any | None = None,
+    max_workers: int = 10,
+) -> None:
+    service = GenericSimulatorService(
+        simulator,
+        name=name,
+        scenario_format=scenario_format,
+    )
+    serve_sim(service, name=name, port=port, max_workers=max_workers)
+
+
+def _peer(context: Any) -> str:
+    try:
+        return context.peer()
+    except Exception:
+        return "unknown"
+
+
+__all__ = [
+    "GenericSimulatorService",
+    "InvalidSimulatorRequest",
+    "Simulator",
+    "SimulatorError",
+    "SimulatorNotReady",
+    "serve_simulator",
+]
