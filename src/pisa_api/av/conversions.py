@@ -81,9 +81,7 @@ def reset_request_from_proto(request: AvServerMessages.ResetRequest) -> ResetReq
     return ResetRequest(
         output_dir=Path(request.output_dir.path),
         scenario_pack=scenario_pack_from_proto(request.scenario_pack),
-        initial_observation=[
-            object_state_from_proto(obj) for obj in request.initial_observation
-        ],
+        initial_observation=[object_state_from_proto(obj) for obj in request.initial_observation],
     )
 
 
@@ -91,9 +89,7 @@ def reset_request_to_proto(request: ResetRequest) -> AvServerMessages.ResetReque
     return AvServerMessages.ResetRequest(
         output_dir=path_to_proto(request.output_dir),
         scenario_pack=scenario_pack_to_proto(request.scenario_pack),
-        initial_observation=[
-            object_state_to_proto(obj) for obj in request.initial_observation
-        ],
+        initial_observation=[object_state_to_proto(obj) for obj in request.initial_observation],
     )
 
 
@@ -102,9 +98,7 @@ def reset_response_from_proto(response: AvServerMessages.ResetResponse) -> Reset
 
 
 def reset_response_to_proto(response: ResetResponse) -> AvServerMessages.ResetResponse:
-    return AvServerMessages.ResetResponse(
-        ctrl_cmd=control_command_to_proto(response.ctrl_cmd)
-    )
+    return AvServerMessages.ResetResponse(ctrl_cmd=control_command_to_proto(response.ctrl_cmd))
 
 
 def step_request_from_proto(request: AvServerMessages.StepRequest) -> StepRequest:

@@ -34,20 +34,15 @@ logger = logging.getLogger(__name__)
 
 
 class AvSystem(Protocol):
-    def init(self, request: InitRequest) -> InitResponse | None:
-        ...
+    def init(self, request: InitRequest) -> InitResponse | None: ...
 
-    def reset(self, request: ResetRequest) -> ControlCommand | ResetResponse:
-        ...
+    def reset(self, request: ResetRequest) -> ControlCommand | ResetResponse: ...
 
-    def step(self, request: StepRequest) -> ControlCommand | StepResponse:
-        ...
+    def step(self, request: StepRequest) -> ControlCommand | StepResponse: ...
 
-    def stop(self) -> None:
-        ...
+    def stop(self) -> None: ...
 
-    def should_quit(self) -> bool:
-        ...
+    def should_quit(self) -> bool: ...
 
 
 class AvError(Exception):
@@ -122,9 +117,7 @@ class GenericAvService(BaseAvServer):
             try:
                 result = self._av_system.reset(reset_request)
                 response = (
-                    result
-                    if isinstance(result, ResetResponse)
-                    else ResetResponse(ctrl_cmd=result)
+                    result if isinstance(result, ResetResponse) else ResetResponse(ctrl_cmd=result)
                 )
             except AvUnavailable as exc:
                 return self._unavailable(
@@ -169,9 +162,7 @@ class GenericAvService(BaseAvServer):
             try:
                 result = self._av_system.step(step_request)
                 response = (
-                    result
-                    if isinstance(result, StepResponse)
-                    else StepResponse(ctrl_cmd=result)
+                    result if isinstance(result, StepResponse) else StepResponse(ctrl_cmd=result)
                 )
             except AvUnavailable as exc:
                 return self._unavailable(

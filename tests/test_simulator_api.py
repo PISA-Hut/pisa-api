@@ -297,9 +297,7 @@ def test_serve_simulator_wraps_existing_serve_sim(monkeypatch) -> None:
     )
 
     assert isinstance(calls["servicer"], GenericSimulatorService)
-    assert calls["servicer"]._scenario_formats == frozenset(
-        {"open_scenario1", "open_scenario2"}
-    )
+    assert calls["servicer"]._scenario_formats == frozenset({"open_scenario1", "open_scenario2"})
     assert calls["port"] == 1234
     assert calls["max_workers"] == 2
     assert calls["name"] == "Fake"

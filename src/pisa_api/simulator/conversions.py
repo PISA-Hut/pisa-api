@@ -186,10 +186,7 @@ def scenario_pack_from_proto(scenario_pack: ScenarioPack) -> ScenarioPackData:
     return ScenarioPackData(
         name=scenario_pack.name,
         map_name=scenario_pack.map_name,
-        scenarios={
-            name: Path(path.path)
-            for name, path in scenario_pack.scenarios.items()
-        },
+        scenarios={name: Path(path.path) for name, path in scenario_pack.scenarios.items()},
         param_range_file=(
             path_from_proto(scenario_pack.param_range_file)
             if _has_field(scenario_pack, "param_range_file")
@@ -264,10 +261,7 @@ def shape_from_proto(shape: Shape) -> ShapeData:
             y=shape.dimensions.y,
             z=shape.dimensions.z,
         ),
-        vertices=[
-            ShapeVertexData(x=vertex.x, y=vertex.y, z=vertex.z)
-            for vertex in shape.vertices
-        ],
+        vertices=[ShapeVertexData(x=vertex.x, y=vertex.y, z=vertex.z) for vertex in shape.vertices],
     )
 
 
@@ -279,10 +273,7 @@ def shape_to_proto(shape: ShapeData) -> Shape:
             y=shape.dimensions.y,
             z=shape.dimensions.z,
         ),
-        vertices=[
-            Shape.Vertex(x=vertex.x, y=vertex.y, z=vertex.z)
-            for vertex in shape.vertices
-        ],
+        vertices=[Shape.Vertex(x=vertex.x, y=vertex.y, z=vertex.z) for vertex in shape.vertices],
     )
 
 

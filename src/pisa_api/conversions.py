@@ -250,10 +250,7 @@ def shape_from_proto(shape: Shape) -> ShapeData:
             y=shape.dimensions.y,
             z=shape.dimensions.z,
         ),
-        vertices=[
-            ShapeVertexData(x=vertex.x, y=vertex.y, z=vertex.z)
-            for vertex in shape.vertices
-        ],
+        vertices=[ShapeVertexData(x=vertex.x, y=vertex.y, z=vertex.z) for vertex in shape.vertices],
     )
 
 
@@ -265,10 +262,7 @@ def shape_to_proto(shape: ShapeData) -> Shape:
             y=shape.dimensions.y,
             z=shape.dimensions.z,
         ),
-        vertices=[
-            Shape.Vertex(x=vertex.x, y=vertex.y, z=vertex.z)
-            for vertex in shape.vertices
-        ],
+        vertices=[Shape.Vertex(x=vertex.x, y=vertex.y, z=vertex.z) for vertex in shape.vertices],
     )
 
 

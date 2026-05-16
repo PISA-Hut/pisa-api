@@ -35,20 +35,15 @@ logger = logging.getLogger(__name__)
 
 
 class Simulator(Protocol):
-    def init(self, request: InitRequest) -> InitResponse | None:
-        ...
+    def init(self, request: InitRequest) -> InitResponse | None: ...
 
-    def reset(self, request: ResetRequest) -> RuntimeFrameData | ResetResponse:
-        ...
+    def reset(self, request: ResetRequest) -> RuntimeFrameData | ResetResponse: ...
 
-    def step(self, request: StepRequest) -> RuntimeFrameData | StepResponse:
-        ...
+    def step(self, request: StepRequest) -> RuntimeFrameData | StepResponse: ...
 
-    def stop(self) -> None:
-        ...
+    def stop(self) -> None: ...
 
-    def should_quit(self) -> bool:
-        ...
+    def should_quit(self) -> bool: ...
 
 
 class SimulatorError(Exception):
@@ -139,9 +134,7 @@ class GenericSimulatorService(BaseSimServer):
             try:
                 result = self._simulator.reset(reset_request)
                 response = (
-                    result
-                    if isinstance(result, ResetResponse)
-                    else ResetResponse(frame=result)
+                    result if isinstance(result, ResetResponse) else ResetResponse(frame=result)
                 )
             except (InvalidSimulatorRequest, SimulatorNotReady, RuntimeError) as exc:
                 return self._failed_precondition(
@@ -180,9 +173,7 @@ class GenericSimulatorService(BaseSimServer):
             try:
                 result = self._simulator.step(step_request)
                 response = (
-                    result
-                    if isinstance(result, StepResponse)
-                    else StepResponse(frame=result)
+                    result if isinstance(result, StepResponse) else StepResponse(frame=result)
                 )
             except (InvalidSimulatorRequest, SimulatorNotReady, RuntimeError) as exc:
                 return self._failed_precondition(
